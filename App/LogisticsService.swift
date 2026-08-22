@@ -12,6 +12,12 @@ struct LogisticsCredentials {
     }
 }
 
+struct LogisticsQueryResult {
+    let events: [TrackingEvent]
+    let carrierCode: String
+    let carrierName: String
+}
+
 enum LogisticsError: LocalizedError {
     case missingCredentials
     case missingTrackingNumber
@@ -23,7 +29,7 @@ enum LogisticsError: LocalizedError {
         switch self {
         case .missingCredentials: return "请先在物流设置中填写 customer 和授权 key。"
         case .missingTrackingNumber: return "请先填写运单号。"
-        case .unknownCarrier: return "无法识别快递公司，请在编辑页填写快递公司编码。"
+        case .unknownCarrier: return "无法根据这个运单号自动识别快递公司。"
         case .badResponse: return "物流接口返回了无法识别的数据。"
         case .api(let message): return message
         }
@@ -106,24 +112,71 @@ struct Kuaidi100Service {
         let areaName: String?
     }
 
-    static func query(_ shipment: Shipment, credentials: LogisticsCredentials) async throws -> [TrackingEvent] {
-        guard credentials.isValid else { throw LogisticsError.missingCredentials }
-        guard !shipment.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw LogisticsError.missingTrackingNumber
-        }
-        guard let com = carrierCode(for: shipment) else { throw LogisticsError.unknownCarrier }
+    private struct CarrierGuess: Decodable {
+        let comCode: String
+        let name: String
+    }
 
-        var paramObject: [String: String] = [
-            "com": com,
-            "num": shipment.trackingNumber,
-            "phone": shipment.trackingPhoneSuffix,
+    static func query(_ shipment: Shipment, credentials: LogisticsCredentials) async throws -> LogisticsQueryResult {
+        guard credentials.isValid else { throw LogisticsError.missingCredentials }
+        let number = shipment.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !number.isEmpty else { throw LogisticsError.missingTrackingNumber }
+
+        let carrier: CarrierGuess
+        if let code = shipment.carrierCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+            carrier = CarrierGuess(comCode: code.lowercased(), name: shipment.carrier.isEmpty ? displayName(for: code) : shipment.carrier)
+        } else {
+            carrier = try await identifyCarrier(number: number, key: credentials.key)
+        }
+
+        let events = try await queryRealtime(
+            number: number,
+            carrierCode: carrier.comCode,
+            phone: shipment.trackingPhoneSuffix,
+            credentials: credentials
+        )
+
+        return LogisticsQueryResult(events: events, carrierCode: carrier.comCode, carrierName: carrier.name)
+    }
+
+    private static func identifyCarrier(number: String, key: String) async throws -> CarrierGuess {
+        var components = URLComponents(string: "https://www.kuaidi100.com/autonumber/auto")!
+        components.queryItems = [
+            URLQueryItem(name: "num", value: number),
+            URLQueryItem(name: "key", value: key)
+        ]
+        guard let url = components.url else { throw LogisticsError.badResponse }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LogisticsError.badResponse
+        }
+
+        if let guesses = try? JSONDecoder().decode([CarrierGuess].self, from: data), let first = guesses.first {
+            return first
+        }
+
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let message = object["message"] as? String {
+            throw LogisticsError.api(message)
+        }
+
+        throw LogisticsError.unknownCarrier
+    }
+
+    private static func queryRealtime(number: String, carrierCode: String, phone: String, credentials: LogisticsCredentials) async throws -> [TrackingEvent] {
+        let paramObject: [String: String] = [
+            "com": carrierCode,
+            "num": number,
+            "phone": phone,
             "from": "",
             "to": "",
             "resultv2": "4",
             "show": "0",
             "order": "desc"
         ]
-        if shipment.trackingPhoneSuffix.isEmpty { paramObject["phone"] = "" }
 
         let jsonData = try JSONSerialization.data(withJSONObject: paramObject, options: [])
         guard let param = String(data: jsonData, encoding: .utf8) else { throw LogisticsError.badResponse }
@@ -159,21 +212,14 @@ struct Kuaidi100Service {
         }
     }
 
-    static func carrierCode(for shipment: Shipment) -> String? {
-        if let code = shipment.carrierCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-            return code.lowercased()
-        }
-        let name = shipment.carrier.lowercased()
-        let map: [(String, String)] = [
-            ("顺丰", "shunfeng"), ("sf", "shunfeng"),
-            ("中通", "zhongtong"), ("申通", "shentong"),
-            ("圆通", "yuantong"), ("韵达", "yunda"),
-            ("极兔", "jtexpress"), ("京东", "jd"),
-            ("邮政", "youzhengguonei"), ("ems", "ems"),
-            ("德邦", "debangwuliu"), ("百世", "huitongkuaidi")
+    private static func displayName(for code: String) -> String {
+        let map: [String: String] = [
+            "shunfeng": "顺丰速运", "zhongtong": "中通快递", "shentong": "申通快递",
+            "yuantong": "圆通速递", "yunda": "韵达快递", "jtexpress": "极兔速递",
+            "jd": "京东物流", "ems": "EMS", "youzhengguonei": "邮政快递包裹",
+            "debangwuliu": "德邦快递", "huitongkuaidi": "百世快递"
         ]
-        for (needle, code) in map where name.contains(needle.lowercased()) { return code }
-        return nil
+        return map[code.lowercased()] ?? code
     }
 
     private static func md5Uppercase(_ value: String) -> String {
