@@ -1,0 +1,24 @@
+name: OfflineTestShell
+options:
+  bundleIdPrefix: com.local
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+targets:
+  OfflineTestShell:
+    type: application
+    platform: iOS
+    deploymentTarget: '16.0'
+    sources:
+      - App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.offlinetestshell
+        PRODUCT_NAME: OfflineTestShell
+        INFOPLIST_KEY_CFBundleDisplayName: 测试壳
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: '1,2'
+        SUPPORTS_MACCATALYST: NO
