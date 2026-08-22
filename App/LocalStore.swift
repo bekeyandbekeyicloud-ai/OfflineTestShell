@@ -5,6 +5,7 @@ import UserNotifications
 final class LocalStore: ObservableObject {
     @Published var shipments: [Shipment] = [] { didSet { save() } }
     @Published var memos: [Memo] = [] { didSet { save() } }
+    @Published var isRefreshingLogistics = false
 
     private let fileURL: URL
     private var isLoading = true
@@ -59,6 +60,42 @@ final class LocalStore: ObservableObject {
 
     func deleteMemo(_ memo: Memo) {
         memos.removeAll { $0.id == memo.id }
+    }
+
+    func refreshDueShipments(force: Bool = false) async {
+        let credentials = CredentialStore.credentials
+        guard credentials.isValid else { return }
+        isRefreshingLogistics = true
+        defer { isRefreshingLogistics = false }
+
+        let now = Date()
+        let candidates = shipments.filter { shipment in
+            guard !shipment.isArchived, !shipment.trackingNumber.isEmpty else { return false }
+            if force { return true }
+            guard let last = shipment.lastTrackingRefresh else { return true }
+            return now.timeIntervalSince(last) >= 30 * 60
+        }
+
+        for shipment in candidates {
+            await refreshShipment(id: shipment.id, force: force)
+        }
+    }
+
+    func refreshShipment(id: UUID, force: Bool = true) async {
+        guard let index = shipments.firstIndex(where: { $0.id == id }) else { return }
+        var shipment = shipments[index]
+        if !force, let last = shipment.lastTrackingRefresh, Date().timeIntervalSince(last) < 30 * 60 { return }
+
+        shipment.lastTrackingRefresh = Date()
+        do {
+            let events = try await Kuaidi100Service.query(shipment, credentials: CredentialStore.credentials)
+            if !events.isEmpty { shipment.trackingEvents = events }
+            shipment.trackingSource = "快递100自动查询"
+            shipment.trackingError = nil
+        } catch {
+            shipment.trackingError = error.localizedDescription
+        }
+        shipments[index] = shipment
     }
 
     private func scheduleReminder(for shipment: Shipment) {
