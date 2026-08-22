@@ -12,13 +12,13 @@ struct ShipmentListView: View {
         store.shipments
             .filter { showArchived ? $0.isArchived : !$0.isArchived }
             .filter { kindFilter == "全部" || $0.kind.rawValue == kindFilter }
-            .filter {
+            .filter { shipment in
                 searchText.isEmpty ||
-                $0.title.localizedCaseInsensitiveContains(searchText) ||
-                $0.holder.localizedCaseInsensitiveContains(searchText) ||
-                $0.trackingNumber.localizedCaseInsensitiveContains(searchText) ||
-                $0.notes.localizedCaseInsensitiveContains(searchText) ||
-                ($0.latestTrackingEvent?.detail.localizedCaseInsensitiveContains(searchText) ?? false)
+                shipment.title.localizedCaseInsensitiveContains(searchText) ||
+                shipment.holder.localizedCaseInsensitiveContains(searchText) ||
+                shipment.trackingNumber.localizedCaseInsensitiveContains(searchText) ||
+                shipment.notes.localizedCaseInsensitiveContains(searchText) ||
+                (shipment.latestTrackingEvent?.detail.localizedCaseInsensitiveContains(searchText) ?? false)
             }
             .sorted {
                 if $0.isPinned != $1.isPinned { return $0.isPinned && !$1.isPinned }
@@ -31,19 +31,20 @@ struct ShipmentListView: View {
             List {
                 Picker("类型", selection: $kindFilter) {
                     Text("全部").tag("全部")
-                    ForEach(ShipmentKind.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                    ForEach(ShipmentKind.allCases) { item in
+                        Text(item.rawValue).tag(item.rawValue)
+                    }
                 }
                 .pickerStyle(.segmented)
 
                 Toggle("查看已归档", isOn: $showArchived)
 
                 if filtered.isEmpty {
-                    ContentUnavailableView("暂无记录", systemImage: "shippingbox", description: Text("点右上角 + 新建第一条货物记录"))
+                    EmptyStateView(icon: "shippingbox", title: "暂无记录", subtitle: "点右上角 + 新建第一条货物记录")
+                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(filtered) { shipment in
-                        NavigationLink {
-                            ShipmentDetailView(shipmentID: shipment.id)
-                        } label: {
+                        NavigationLink(destination: ShipmentDetailView(shipmentID: shipment.id)) {
                             ShipmentRow(shipment: shipment)
                         }
                         .listRowBackground(rowBackground(for: shipment.effectiveColorState))
@@ -56,15 +57,22 @@ struct ShipmentListView: View {
             .navigationTitle("货物手册")
             .searchable(text: $searchText, prompt: "搜索货物、人员、单号、物流进度")
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        Task { await store.refreshDueShipments(force: true) }
-                    } label: {
-                        if store.isRefreshingLogistics { ProgressView() }
-                        else { Image(systemName: "arrow.clockwise") }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 14) {
+                        Button(action: refreshAll) {
+                            if store.isRefreshingLogistics {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        Button(action: { showingLogisticsSettings = true }) {
+                            Image(systemName: "gearshape")
+                        }
+                        Button(action: { showingNew = true }) {
+                            Image(systemName: "plus")
+                        }
                     }
-                    Button { showingLogisticsSettings = true } label: { Image(systemName: "gearshape") }
-                    Button { showingNew = true } label: { Image(systemName: "plus") }
                 }
             }
             .sheet(isPresented: $showingNew) {
@@ -82,6 +90,10 @@ struct ShipmentListView: View {
         }
     }
 
+    private func refreshAll() {
+        Task { await store.refreshDueShipments(force: true) }
+    }
+
     private func rowBackground(for state: ShipmentColorState) -> Color {
         switch state {
         case .completed: return Color.green.opacity(0.16)
@@ -91,53 +103,84 @@ struct ShipmentListView: View {
     }
 }
 
+struct EmptyStateView: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 34))
+                .foregroundColor(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 34)
+    }
+}
+
 struct ShipmentRow: View {
     let shipment: Shipment
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                if shipment.isPinned { Image(systemName: "pin.fill").foregroundStyle(.orange) }
-                Text(shipment.title.isEmpty ? "未命名货物" : shipment.title).font(.headline)
+                if shipment.isPinned {
+                    Image(systemName: "pin.fill").foregroundColor(.orange)
+                }
+                Text(shipment.title.isEmpty ? "未命名货物" : shipment.title)
+                    .font(.headline)
                 Spacer()
-                Text(shipment.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                Text(shipment.kind.rawValue)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             if !shipment.holder.isEmpty {
                 Text("在：\(shipment.holder)")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             if !shipment.trackingNumber.isEmpty {
                 Text("\(shipment.carrier.isEmpty ? "物流" : shipment.carrier) · \(shipment.trackingNumber)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
             }
 
-            if let latest = shipment.latestTrackingEvent {
-                HStack(alignment: .top, spacing: 5) {
-                    Image(systemName: "location.fill")
-                    Text(latest.detail)
-                        .lineLimit(2)
-                }
-                .font(.caption)
-                .foregroundStyle(.primary)
-            } else if !shipment.trackingNumber.isEmpty {
-                Text(shipment.trackingError ?? "等待物流更新")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            trackingSummary
 
             if let reminder = shipment.reminderDate {
                 Label(reminder.displayDateTime, systemImage: "bell")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(.vertical, 5)
+    }
+
+    @ViewBuilder
+    private var trackingSummary: some View {
+        if let latest = shipment.latestTrackingEvent {
+            HStack(alignment: .top, spacing: 5) {
+                Image(systemName: "location.fill")
+                Text(latest.detail).lineLimit(2)
+            }
+            .font(.caption)
+            .foregroundColor(.primary)
+        } else if !shipment.trackingNumber.isEmpty {
+            Text(shipment.trackingError ?? "等待物流更新")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+        }
     }
 }
 
@@ -176,83 +219,111 @@ struct ShipmentEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("基本信息") {
-                    TextField("标题 / 记号，例如 A001、淘宝耳机", text: $shipment.title)
-                    Picker("类型", selection: $shipment.kind) {
-                        ForEach(ShipmentKind.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("颜色状态", selection: $selectedColorState) {
-                        Text("淡红 · 未完成").tag(ShipmentColorState.unfinished)
-                        Text("淡黄 · 进行中").tag(ShipmentColorState.progressing)
-                        Text("淡绿 · 已完成").tag(ShipmentColorState.completed)
-                    }
-                    Picker("详细状态", selection: $shipment.status) {
-                        ForEach(ShipmentStatus.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    TextField("货物在谁手上", text: $shipment.holder)
-                    Toggle("重要 / 置顶", isOn: $shipment.isPinned)
-                }
-
-                Section("物流") {
-                    TextField("快递公司，例如 顺丰、申通、中通", text: $shipment.carrier)
-                    TextField("快递公司编码（识别失败时填写）", text: Binding(get: {
-                        shipment.carrierCode ?? ""
-                    }, set: { shipment.carrierCode = $0.isEmpty ? nil : $0 }))
-                        .textInputAutocapitalization(.never)
-                    TextField("运单号", text: $shipment.trackingNumber)
-                        .textInputAutocapitalization(.characters)
-                    TextField("查询手机号 / 尾号（顺丰、中通等）", text: $shipment.trackingPhoneSuffix)
-                        .keyboardType(.numberPad)
-                    Text("保存后，进入货物主页会自动查询物流；同一单号至少间隔 30 分钟自动刷新。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("日期") {
-                    Toggle("预计到货日期", isOn: $hasExpectedArrival)
-                    if hasExpectedArrival {
-                        DatePicker("预计到货", selection: Binding(get: {
-                            shipment.expectedArrival ?? Date()
-                        }, set: { shipment.expectedArrival = $0 }), displayedComponents: [.date, .hourAndMinute])
-                    }
-
-                    Toggle("设置本地提醒", isOn: $hasReminder)
-                    if hasReminder {
-                        DatePicker("提醒时间", selection: Binding(get: {
-                            shipment.reminderDate ?? Date().addingTimeInterval(3600)
-                        }, set: { shipment.reminderDate = $0 }))
-                    }
-                }
-
-                Section("备注") {
-                    TextEditor(text: $shipment.notes)
-                        .frame(minHeight: 120)
-                }
+                basicSection
+                logisticsSection
+                dateSection
+                notesSection
             }
             .navigationTitle(isNew ? "新建记录" : "编辑记录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        shipment.colorState = selectedColorState
-                        if !hasExpectedArrival { shipment.expectedArrival = nil }
-                        if !hasReminder { shipment.reminderDate = nil }
-                        if isNew { store.addShipment(shipment) } else { store.updateShipment(shipment) }
-                        dismiss()
-                        if !shipment.trackingNumber.isEmpty {
-                            Task { await store.refreshShipment(id: shipment.id, force: true) }
-                        }
-                    }
-                    .disabled(shipment.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("保存", action: save)
+                        .disabled(shipment.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
     }
 
+    private var basicSection: some View {
+        Section("基本信息") {
+            TextField("标题 / 记号，例如 A001、淘宝耳机", text: $shipment.title)
+            Picker("类型", selection: $shipment.kind) {
+                ForEach(ShipmentKind.allCases) { item in
+                    Text(item.rawValue).tag(item)
+                }
+            }
+            Picker("颜色状态", selection: $selectedColorState) {
+                Text("淡红 · 未完成").tag(ShipmentColorState.unfinished)
+                Text("淡黄 · 进行中").tag(ShipmentColorState.progressing)
+                Text("淡绿 · 已完成").tag(ShipmentColorState.completed)
+            }
+            Picker("详细状态", selection: $shipment.status) {
+                ForEach(ShipmentStatus.allCases) { item in
+                    Text(item.rawValue).tag(item)
+                }
+            }
+            TextField("货物在谁手上", text: $shipment.holder)
+            Toggle("重要 / 置顶", isOn: $shipment.isPinned)
+        }
+    }
+
+    private var logisticsSection: some View {
+        Section("物流") {
+            TextField("快递公司，例如 顺丰、申通、中通", text: $shipment.carrier)
+            TextField("快递公司编码（识别失败时填写）", text: carrierCodeBinding)
+                .textInputAutocapitalization(.never)
+            TextField("运单号", text: $shipment.trackingNumber)
+                .textInputAutocapitalization(.characters)
+            TextField("查询手机号 / 尾号（顺丰、中通等）", text: $shipment.trackingPhoneSuffix)
+                .keyboardType(.numberPad)
+            Text("保存后，进入货物主页会自动查询物流；同一单号至少间隔 30 分钟自动刷新。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var dateSection: some View {
+        Section("日期") {
+            Toggle("预计到货日期", isOn: $hasExpectedArrival)
+            if hasExpectedArrival {
+                DatePicker("预计到货", selection: expectedArrivalBinding, displayedComponents: [.date, .hourAndMinute])
+            }
+            Toggle("设置本地提醒", isOn: $hasReminder)
+            if hasReminder {
+                DatePicker("提醒时间", selection: reminderBinding)
+            }
+        }
+    }
+
+    private var notesSection: some View {
+        Section("备注") {
+            TextEditor(text: $shipment.notes)
+                .frame(minHeight: 120)
+        }
+    }
+
+    private var carrierCodeBinding: Binding<String> {
+        Binding(get: { shipment.carrierCode ?? "" }, set: { shipment.carrierCode = $0.isEmpty ? nil : $0 })
+    }
+
+    private var expectedArrivalBinding: Binding<Date> {
+        Binding(get: { shipment.expectedArrival ?? Date() }, set: { shipment.expectedArrival = $0 })
+    }
+
+    private var reminderBinding: Binding<Date> {
+        Binding(get: { shipment.reminderDate ?? Date().addingTimeInterval(3600) }, set: { shipment.reminderDate = $0 })
+    }
+
     private var isNew: Bool {
         if case .new = mode { return true }
         return false
+    }
+
+    private func save() {
+        shipment.colorState = selectedColorState
+        if !hasExpectedArrival { shipment.expectedArrival = nil }
+        if !hasReminder { shipment.reminderDate = nil }
+        if isNew { store.addShipment(shipment) } else { store.updateShipment(shipment) }
+        let shipmentID = shipment.id
+        let hasTracking = !shipment.trackingNumber.isEmpty
+        dismiss()
+        if hasTracking {
+            Task { await store.refreshShipment(id: shipmentID, force: true) }
+        }
     }
 }
 
@@ -264,91 +335,145 @@ struct ShipmentDetailView: View {
     @State private var logisticsMessage = ""
     @State private var showingLogisticsAlert = false
 
-    private var shipment: Shipment? { store.shipments.first { $0.id == shipmentID } }
+    private var shipment: Shipment? {
+        store.shipments.first { $0.id == shipmentID }
+    }
 
     var body: some View {
         Group {
-            if let shipment {
-                List {
-                    Section {
-                        LabeledContent("类型", value: shipment.kind.rawValue)
-                        LabeledContent("颜色状态", value: shipment.effectiveColorState.rawValue)
-                        LabeledContent("详细状态", value: shipment.status.rawValue)
-                        if !shipment.holder.isEmpty { LabeledContent("当前在", value: shipment.holder) }
-                        if let expected = shipment.expectedArrival { LabeledContent("预计到货", value: expected.displayDateTime) }
-                        if let reminder = shipment.reminderDate { LabeledContent("提醒", value: reminder.displayDateTime) }
-                    }
-
-                    Section("物流") {
-                        LabeledContent("快递公司", value: shipment.carrier.isEmpty ? "未填写" : shipment.carrier)
-                        LabeledContent("运单号", value: shipment.trackingNumber.isEmpty ? "未填写" : shipment.trackingNumber)
-                        if !shipment.trackingPhoneSuffix.isEmpty {
-                            LabeledContent("验证手机号", value: shipment.trackingPhoneSuffix)
-                        }
-                        LabeledContent("信息来源", value: shipment.trackingSource)
-                        if let last = shipment.lastTrackingRefresh {
-                            LabeledContent("上次查询", value: last.displayDateTime)
-                        }
-                        if let error = shipment.trackingError, !error.isEmpty {
-                            Text(error).font(.caption).foregroundStyle(.red)
-                        }
-                        Button {
-                            Task {
-                                await store.refreshShipment(id: shipment.id, force: true)
-                                logisticsMessage = store.shipments.first(where: { $0.id == shipment.id })?.trackingError ?? "物流已刷新。"
-                                showingLogisticsAlert = true
-                            }
-                        } label: {
-                            Label("立即刷新物流", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(shipment.trackingNumber.isEmpty)
-                    }
-
-                    Section("物流时间线") {
-                        Button { showingAddEvent = true } label: {
-                            Label("添加物流进度", systemImage: "plus.circle")
-                        }
-                        if shipment.trackingEvents.isEmpty {
-                            Text("还没有物流节点").foregroundStyle(.secondary)
-                        } else {
-                            ForEach(shipment.trackingEvents.sorted { $0.date > $1.date }) { event in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(event.detail).font(.body)
-                                    HStack {
-                                        if !event.location.isEmpty { Text(event.location) }
-                                        Text(event.date.displayDateTime)
-                                    }
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-
-                    if !shipment.notes.isEmpty {
-                        Section("备注") { Text(shipment.notes) }
-                    }
-
-                    Section {
-                        Button(shipment.isArchived ? "取消归档" : "归档此记录") {
-                            var updated = shipment
-                            updated.isArchived.toggle()
-                            store.updateShipment(updated)
-                        }
-                    }
-                }
-                .navigationTitle(shipment.title)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("编辑") { showingEdit = true }
-                    }
-                }
-                .sheet(isPresented: $showingEdit) { ShipmentEditorView(mode: .edit(shipment)) }
-                .sheet(isPresented: $showingAddEvent) { AddTrackingEventView(shipment: shipment) }
-                .alert("物流查询", isPresented: $showingLogisticsAlert) { Button("好") {} } message: { Text(logisticsMessage) }
+            if let current = shipment {
+                shipmentContent(current)
             } else {
-                ContentUnavailableView("记录不存在", systemImage: "exclamationmark.triangle")
+                EmptyStateView(icon: "exclamationmark.triangle", title: "记录不存在", subtitle: "这条记录可能已经被删除")
             }
+        }
+    }
+
+    private func shipmentContent(_ shipment: Shipment) -> some View {
+        List {
+            ShipmentInfoSection(shipment: shipment)
+            ShipmentLogisticsSection(shipment: shipment, refreshAction: { refresh(shipment) })
+            ShipmentTimelineSection(shipment: shipment, addAction: { showingAddEvent = true })
+            if !shipment.notes.isEmpty {
+                Section("备注") { Text(shipment.notes) }
+            }
+            Section {
+                Button(shipment.isArchived ? "取消归档" : "归档此记录") {
+                    var updated = shipment
+                    updated.isArchived.toggle()
+                    store.updateShipment(updated)
+                }
+            }
+        }
+        .navigationTitle(shipment.title)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("编辑") { showingEdit = true }
+            }
+        }
+        .sheet(isPresented: $showingEdit) {
+            ShipmentEditorView(mode: .edit(shipment))
+        }
+        .sheet(isPresented: $showingAddEvent) {
+            AddTrackingEventView(shipment: shipment)
+        }
+        .alert("物流查询", isPresented: $showingLogisticsAlert) {
+            Button("好", role: .cancel) { }
+        } message: {
+            Text(logisticsMessage)
+        }
+    }
+
+    private func refresh(_ shipment: Shipment) {
+        Task {
+            await store.refreshShipment(id: shipment.id, force: true)
+            logisticsMessage = store.shipments.first(where: { $0.id == shipment.id })?.trackingError ?? "物流已刷新。"
+            showingLogisticsAlert = true
+        }
+    }
+}
+
+struct ShipmentInfoSection: View {
+    let shipment: Shipment
+
+    var body: some View {
+        Section("货物信息") {
+            LabeledContent("类型", value: shipment.kind.rawValue)
+            if !shipment.holder.isEmpty {
+                LabeledContent("当前在", value: shipment.holder)
+            }
+            if let expected = shipment.expectedArrival {
+                LabeledContent("预计到货", value: expected.displayDateTime)
+            }
+            if let reminder = shipment.reminderDate {
+                LabeledContent("提醒", value: reminder.displayDateTime)
+            }
+        }
+    }
+}
+
+struct ShipmentLogisticsSection: View {
+    let shipment: Shipment
+    let refreshAction: () -> Void
+
+    var body: some View {
+        Section("物流") {
+            LabeledContent("快递公司", value: shipment.carrier.isEmpty ? "未填写" : shipment.carrier)
+            LabeledContent("运单号", value: shipment.trackingNumber.isEmpty ? "未填写" : shipment.trackingNumber)
+            if !shipment.trackingPhoneSuffix.isEmpty {
+                LabeledContent("验证手机号", value: shipment.trackingPhoneSuffix)
+            }
+            LabeledContent("信息来源", value: shipment.trackingSource)
+            if let last = shipment.lastTrackingRefresh {
+                LabeledContent("上次查询", value: last.displayDateTime)
+            }
+            if let error = shipment.trackingError, !error.isEmpty {
+                Text(error).font(.caption).foregroundColor(.red)
+            }
+            Button(action: refreshAction) {
+                Label("立即刷新物流", systemImage: "arrow.clockwise")
+            }
+            .disabled(shipment.trackingNumber.isEmpty)
+        }
+    }
+}
+
+struct ShipmentTimelineSection: View {
+    let shipment: Shipment
+    let addAction: () -> Void
+
+    private var sortedEvents: [TrackingEvent] {
+        shipment.trackingEvents.sorted { $0.date > $1.date }
+    }
+
+    var body: some View {
+        Section("物流时间线") {
+            Button(action: addAction) {
+                Label("添加物流进度", systemImage: "plus.circle")
+            }
+            if sortedEvents.isEmpty {
+                Text("还没有物流节点").foregroundColor(.secondary)
+            } else {
+                ForEach(sortedEvents) { event in
+                    TrackingEventRow(event: event)
+                }
+            }
+        }
+    }
+}
+
+struct TrackingEventRow: View {
+    let event: TrackingEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(event.detail)
+            HStack {
+                if !event.location.isEmpty { Text(event.location) }
+                Text(event.date.displayDateTime)
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
         }
     }
 }
@@ -371,19 +496,23 @@ struct AddTrackingEventView: View {
             .navigationTitle("添加物流进度")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        var updated = shipment
-                        updated.trackingEvents.append(TrackingEvent(date: date, location: location, detail: detail))
-                        updated.trackingSource = "手动记录"
-                        store.updateShipment(updated)
-                        dismiss()
-                    }
-                    .disabled(detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("保存", action: save)
+                        .disabled(detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
+    }
+
+    private func save() {
+        var updated = shipment
+        updated.trackingEvents.append(TrackingEvent(date: date, location: location, detail: detail))
+        updated.trackingSource = "手动记录"
+        store.updateShipment(updated)
+        dismiss()
     }
 }
 
@@ -400,20 +529,18 @@ struct ReminderListView: View {
         NavigationStack {
             List {
                 if reminders.isEmpty {
-                    ContentUnavailableView("暂无提醒", systemImage: "bell", description: Text("在货物记录中设置提醒日期即可"))
+                    EmptyStateView(icon: "bell", title: "暂无提醒", subtitle: "在货物记录中设置提醒日期即可")
+                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(reminders) { shipment in
-                        NavigationLink {
-                            ShipmentDetailView(shipmentID: shipment.id)
-                        } label: {
+                        NavigationLink(destination: ShipmentDetailView(shipmentID: shipment.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(shipment.title).font(.headline)
                                 if let date = shipment.reminderDate {
                                     Text(date.displayDateTime)
                                         .font(.subheadline)
-                                        .foregroundStyle(date < Date() ? .red : .secondary)
+                                        .foregroundColor(date < Date() ? .red : .secondary)
                                 }
-                                Text(shipment.effectiveColorState.rawValue).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -426,9 +553,9 @@ struct ReminderListView: View {
 
 extension Date {
     var displayDateTime: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "yyyy-MM-dd HH:mm"
-        return f.string(from: self)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: self)
     }
 }
