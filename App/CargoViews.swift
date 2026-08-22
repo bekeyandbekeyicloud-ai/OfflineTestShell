@@ -36,7 +36,7 @@ struct ShipmentListView: View {
                 Toggle("查看已归档", isOn: $showArchived)
 
                 if filtered.isEmpty {
-                    ContentUnavailableView("暂无记录", systemImage: "shippingbox", description: Text("点右上角 + 新建第一条货物记录"))
+                    EmptyStateView(title: "暂无记录", systemImage: "shippingbox", message: "点右上角 + 新建第一条货物记录")
                 } else {
                     ForEach(filtered) { shipment in
                         NavigationLink {
@@ -53,7 +53,7 @@ struct ShipmentListView: View {
             .navigationTitle("货物手册")
             .searchable(text: $searchText, prompt: "搜索货物、人员、单号")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingNew = true } label: { Image(systemName: "plus") }
                 }
             }
@@ -70,28 +70,28 @@ struct ShipmentRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                if shipment.isPinned { Image(systemName: "pin.fill").foregroundStyle(.orange) }
+                if shipment.isPinned { Image(systemName: "pin.fill").foregroundColor(.orange) }
                 Text(shipment.title.isEmpty ? "未命名货物" : shipment.title).font(.headline)
                 Spacer()
-                Text(shipment.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                Text(shipment.kind.rawValue).font(.caption).foregroundColor(.secondary)
             }
             HStack(spacing: 10) {
                 Text(shipment.status.rawValue)
                 if !shipment.holder.isEmpty { Text("在：\(shipment.holder)") }
             }
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundColor(.secondary)
 
             if !shipment.trackingNumber.isEmpty {
                 Text("\(shipment.carrier.isEmpty ? "物流" : shipment.carrier) · \(shipment.trackingNumber)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
             }
             if let reminder = shipment.reminderDate {
                 Label(reminder.displayDateTime, systemImage: "bell")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(.vertical, 3)
@@ -150,7 +150,7 @@ struct ShipmentEditorView: View {
                         .keyboardType(.numberPad)
                     Text("联网物流查询接口已预留；当前版本先保存单号和验证尾号，物流节点可手动添加。")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("日期") {
@@ -241,7 +241,7 @@ struct ShipmentDetailView: View {
                             Label("添加物流进度", systemImage: "plus.circle")
                         }
                         if shipment.trackingEvents.isEmpty {
-                            Text("还没有物流节点").foregroundStyle(.secondary)
+                            Text("还没有物流节点").foregroundColor(.secondary)
                         } else {
                             ForEach(shipment.trackingEvents.sorted { $0.date > $1.date }) { event in
                                 VStack(alignment: .leading, spacing: 4) {
@@ -251,7 +251,7 @@ struct ShipmentDetailView: View {
                                         Text(event.date.displayDateTime)
                                     }
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                 }
                             }
                         }
@@ -271,7 +271,7 @@ struct ShipmentDetailView: View {
                 }
                 .navigationTitle(shipment.title)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .navigationBarTrailing) {
                         Button("编辑") { showingEdit = true }
                     }
                 }
@@ -279,7 +279,7 @@ struct ShipmentDetailView: View {
                 .sheet(isPresented: $showingAddEvent) { AddTrackingEventView(shipment: shipment) }
                 .alert("物流查询", isPresented: $showingLogisticsAlert) { Button("好") {} } message: { Text(logisticsMessage) }
             } else {
-                ContentUnavailableView("记录不存在", systemImage: "exclamationmark.triangle")
+                EmptyStateView(title: "记录不存在", systemImage: "exclamationmark.triangle", message: "这条记录可能已被删除")
             }
         }
     }
@@ -332,7 +332,7 @@ struct ReminderListView: View {
         NavigationStack {
             List {
                 if reminders.isEmpty {
-                    ContentUnavailableView("暂无提醒", systemImage: "bell", description: Text("在货物记录中设置提醒日期即可"))
+                    EmptyStateView(title: "暂无提醒", systemImage: "bell", message: "在货物记录中设置提醒日期即可")
                 } else {
                     ForEach(reminders) { shipment in
                         NavigationLink {
@@ -343,9 +343,9 @@ struct ReminderListView: View {
                                 if let date = shipment.reminderDate {
                                     Text(date.displayDateTime)
                                         .font(.subheadline)
-                                        .foregroundStyle(date < Date() ? .red : .secondary)
+                                        .foregroundColor(date < Date() ? .red : .secondary)
                                 }
-                                Text(shipment.status.rawValue).font(.caption).foregroundStyle(.secondary)
+                                Text(shipment.status.rawValue).font(.caption).foregroundColor(.secondary)
                             }
                         }
                     }
