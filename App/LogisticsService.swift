@@ -12,10 +12,15 @@ struct LogisticsCredentials {
     }
 }
 
+struct LogisticsQueryResult {
+    let events: [TrackingEvent]
+    let carrierCode: String
+    let carrierName: String
+}
+
 enum LogisticsError: LocalizedError {
     case missingCredentials
     case missingTrackingNumber
-    case unknownCarrier
     case badResponse
     case api(String)
 
@@ -23,7 +28,6 @@ enum LogisticsError: LocalizedError {
         switch self {
         case .missingCredentials: return "请先在物流设置中填写 customer 和授权 key。"
         case .missingTrackingNumber: return "请先填写运单号。"
-        case .unknownCarrier: return "无法识别快递公司，请在编辑页填写快递公司编码。"
         case .badResponse: return "物流接口返回了无法识别的数据。"
         case .api(let message): return message
         }
@@ -95,6 +99,8 @@ struct Kuaidi100Service {
         let result: Bool?
         let returnCode: String?
         let message: String?
+        let com: String?
+        let nu: String?
         let data: [Trace]?
     }
 
@@ -106,24 +112,57 @@ struct Kuaidi100Service {
         let areaName: String?
     }
 
-    static func query(_ shipment: Shipment, credentials: LogisticsCredentials) async throws -> [TrackingEvent] {
-        guard credentials.isValid else { throw LogisticsError.missingCredentials }
-        guard !shipment.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw LogisticsError.missingTrackingNumber
-        }
-        guard let com = carrierCode(for: shipment) else { throw LogisticsError.unknownCarrier }
+    private struct RealtimeResult {
+        let events: [TrackingEvent]
+        let carrierCode: String
+    }
 
-        var paramObject: [String: String] = [
-            "com": com,
-            "num": shipment.trackingNumber,
-            "phone": shipment.trackingPhoneSuffix,
+    static func query(_ shipment: Shipment, credentials: LogisticsCredentials) async throws -> LogisticsQueryResult {
+        guard credentials.isValid else { throw LogisticsError.missingCredentials }
+        let number = shipment.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !number.isEmpty else { throw LogisticsError.missingTrackingNumber }
+
+        // Do not call Kuaidi100's separate intelligent-number API here.
+        // Some trial accounts return code 601 (displayed as key expired) because that product is not enabled.
+        // Prefer an already learned code, otherwise infer common carriers locally from the number format.
+        let savedCode = shipment.carrierCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let initialCode = savedCode.isEmpty ? (localCarrierCode(for: number) ?? "") : savedCode.lowercased()
+
+        let realtime = try await queryRealtime(
+            number: number,
+            carrierCode: initialCode,
+            phone: shipment.trackingPhoneSuffix,
+            credentials: credentials
+        )
+
+        let finalCode = realtime.carrierCode.isEmpty ? initialCode : realtime.carrierCode
+        let finalName: String
+        if !finalCode.isEmpty {
+            finalName = displayName(for: finalCode)
+        } else if !shipment.carrier.isEmpty {
+            finalName = shipment.carrier
+        } else {
+            finalName = "自动识别"
+        }
+
+        return LogisticsQueryResult(
+            events: realtime.events,
+            carrierCode: finalCode,
+            carrierName: finalName
+        )
+    }
+
+    private static func queryRealtime(number: String, carrierCode: String, phone: String, credentials: LogisticsCredentials) async throws -> RealtimeResult {
+        let paramObject: [String: String] = [
+            "com": carrierCode,
+            "num": number,
+            "phone": phone,
             "from": "",
             "to": "",
             "resultv2": "4",
             "show": "0",
             "order": "desc"
         ]
-        if shipment.trackingPhoneSuffix.isEmpty { paramObject["phone"] = "" }
 
         let jsonData = try JSONSerialization.data(withJSONObject: paramObject, options: [])
         guard let param = String(data: jsonData, encoding: .utf8) else { throw LogisticsError.badResponse }
@@ -143,12 +182,19 @@ struct Kuaidi100Service {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw LogisticsError.badResponse
         }
+
         let decoded = try JSONDecoder().decode(APIResponse.self, from: data)
         if decoded.result == false {
-            throw LogisticsError.api(decoded.message ?? "物流查询失败")
+            let message = decoded.message ?? "物流查询失败"
+            // Avoid misleading the user when the old smart-number product error text says the key expired.
+            if decoded.returnCode == "601" || message.localizedCaseInsensitiveContains("key已过期") || message.localizedCaseInsensitiveContains("key 已过期") {
+                throw LogisticsError.api("当前账号未开通独立的智能单号识别服务。本版本已不再调用该服务；如果仍看到此提示，请重新打开 App 后再查询。")
+            }
+            throw LogisticsError.api(message)
         }
+
         guard let traces = decoded.data else { throw LogisticsError.badResponse }
-        return traces.compactMap { trace in
+        let events = traces.compactMap { trace -> TrackingEvent? in
             let detail = trace.context?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !detail.isEmpty else { return nil }
             return TrackingEvent(
@@ -157,23 +203,52 @@ struct Kuaidi100Service {
                 detail: detail
             )
         }
+
+        return RealtimeResult(
+            events: events,
+            carrierCode: (decoded.com ?? carrierCode).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
     }
 
-    static func carrierCode(for shipment: Shipment) -> String? {
-        if let code = shipment.carrierCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-            return code.lowercased()
-        }
-        let name = shipment.carrier.lowercased()
-        let map: [(String, String)] = [
-            ("顺丰", "shunfeng"), ("sf", "shunfeng"),
-            ("中通", "zhongtong"), ("申通", "shentong"),
-            ("圆通", "yuantong"), ("韵达", "yunda"),
-            ("极兔", "jtexpress"), ("京东", "jd"),
-            ("邮政", "youzhengguonei"), ("ems", "ems"),
-            ("德邦", "debangwuliu"), ("百世", "huitongkuaidi")
-        ]
-        for (needle, code) in map where name.contains(needle.lowercased()) { return code }
+    private static func localCarrierCode(for rawNumber: String) -> String? {
+        let number = rawNumber.uppercased().replacingOccurrences(of: " ", with: "")
+
+        if number.hasPrefix("SF") { return "shunfeng" }
+        if number.hasPrefix("YT") { return "yuantong" }
+        if number.hasPrefix("JT") { return "jtexpress" }
+        if number.hasPrefix("JD") { return "jd" }
+
+        // China Post / EMS international-style tracking numbers, e.g. EA123456789CN.
+        if matches(number, pattern: "^[A-Z]{2}[0-9]{9}CN$") { return "ems" }
+
+        // Common high-confidence numeric formats. These are deliberately conservative;
+        // unknown formats are submitted to the realtime endpoint with an empty com field.
+        if matches(number, pattern: "^7[5-9][0-9]{12}$") { return "zhongtong" }
+        if matches(number, pattern: "^[2345689]68[0-9]{9}$") { return "shentong" }
+        if matches(number, pattern: "^(43|45|46|48|50|53)[0-9]{11}$") { return "yunda" }
+
         return nil
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func displayName(for code: String) -> String {
+        let map: [String: String] = [
+            "shunfeng": "顺丰速运",
+            "zhongtong": "中通快递",
+            "shentong": "申通快递",
+            "yuantong": "圆通速递",
+            "yunda": "韵达快递",
+            "jtexpress": "极兔速递",
+            "jd": "京东物流",
+            "ems": "EMS",
+            "youzhengguonei": "邮政快递包裹",
+            "debangwuliu": "德邦快递",
+            "huitongkuaidi": "百世快递"
+        ]
+        return map[code.lowercased()] ?? code
     }
 
     private static func md5Uppercase(_ value: String) -> String {
