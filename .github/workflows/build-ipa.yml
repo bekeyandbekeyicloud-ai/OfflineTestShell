@@ -3,6 +3,7 @@ name: Build TrollStore IPA
 on:
   push:
     branches:
+      - main
       - build/ios-shell
   pull_request:
     branches:
