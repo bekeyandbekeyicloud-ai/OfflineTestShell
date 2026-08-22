@@ -88,8 +88,10 @@ final class LocalStore: ObservableObject {
 
         shipment.lastTrackingRefresh = Date()
         do {
-            let events = try await Kuaidi100Service.query(shipment, credentials: CredentialStore.credentials)
-            if !events.isEmpty { shipment.trackingEvents = events }
+            let result = try await Kuaidi100Service.query(shipment, credentials: CredentialStore.credentials)
+            shipment.carrierCode = result.carrierCode
+            shipment.carrier = result.carrierName
+            if !result.events.isEmpty { shipment.trackingEvents = result.events }
             shipment.trackingSource = "快递100自动查询"
             shipment.trackingError = nil
         } catch {
