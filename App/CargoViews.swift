@@ -131,7 +131,7 @@ struct ShipmentRow: View {
             }
 
             if !shipment.trackingNumber.isEmpty {
-                Text("\(shipment.carrier.isEmpty ? "物流" : shipment.carrier) · \(shipment.trackingNumber)")
+                Text("\(shipment.carrier.isEmpty ? "自动识别中" : shipment.carrier) · \(shipment.trackingNumber)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -158,7 +158,7 @@ struct ShipmentRow: View {
             .font(.caption)
             .foregroundColor(.primary)
         } else if !shipment.trackingNumber.isEmpty {
-            Text(shipment.trackingError ?? "等待物流更新")
+            Text(shipment.trackingError ?? "正在自动识别并查询物流")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .lineLimit(2)
@@ -245,14 +245,16 @@ struct ShipmentEditorView: View {
 
     private var logisticsSection: some View {
         Section("物流") {
-            TextField("快递公司，例如 顺丰、申通、中通", text: $shipment.carrier)
-            TextField("快递公司编码（识别失败时填写）", text: carrierCodeBinding)
-                .textInputAutocapitalization(.never)
-            TextField("运单号", text: $shipment.trackingNumber)
+            TextField("只输入运单号", text: $shipment.trackingNumber)
                 .textInputAutocapitalization(.characters)
-            TextField("查询手机号 / 尾号（顺丰、中通等）", text: $shipment.trackingPhoneSuffix)
-                .keyboardType(.numberPad)
-            Text("保存后，进入货物主页会自动查询物流；同一单号至少间隔 30 分钟自动刷新。")
+                .onChange(of: shipment.trackingNumber) { _ in
+                    shipment.carrier = ""
+                    shipment.carrierCode = nil
+                    shipment.trackingPhoneSuffix = ""
+                    shipment.lastTrackingRefresh = nil
+                    shipment.trackingError = nil
+                }
+            Text("保存后会自动识别快递公司并查询物流，不需要填写快递公司或识别编码。")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -278,10 +280,6 @@ struct ShipmentEditorView: View {
         }
     }
 
-    private var carrierCodeBinding: Binding<String> {
-        Binding(get: { shipment.carrierCode ?? "" }, set: { shipment.carrierCode = $0.isEmpty ? nil : $0 })
-    }
-
     private var expectedArrivalBinding: Binding<Date> {
         Binding(get: { shipment.expectedArrival ?? Date() }, set: { shipment.expectedArrival = $0 })
     }
@@ -301,7 +299,7 @@ struct ShipmentEditorView: View {
         if !hasReminder { shipment.reminderDate = nil }
         if isNew { store.addShipment(shipment) } else { store.updateShipment(shipment) }
         let shipmentID = shipment.id
-        let hasTracking = !shipment.trackingNumber.isEmpty
+        let hasTracking = !shipment.trackingNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dismiss()
         if hasTracking {
             Task { await store.refreshShipment(id: shipmentID, force: true) }
@@ -403,11 +401,8 @@ struct ShipmentLogisticsSection: View {
 
     var body: some View {
         Section("物流") {
-            LabeledContent("快递公司", value: shipment.carrier.isEmpty ? "未填写" : shipment.carrier)
             LabeledContent("运单号", value: shipment.trackingNumber.isEmpty ? "未填写" : shipment.trackingNumber)
-            if !shipment.trackingPhoneSuffix.isEmpty {
-                LabeledContent("验证手机号", value: shipment.trackingPhoneSuffix)
-            }
+            LabeledContent("快递公司", value: shipment.carrier.isEmpty ? "自动识别中" : shipment.carrier)
             LabeledContent("信息来源", value: shipment.trackingSource)
             if let last = shipment.lastTrackingRefresh {
                 LabeledContent("上次查询", value: last.displayDateTime)
