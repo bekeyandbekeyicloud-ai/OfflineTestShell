@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - build/ios-shell
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
