@@ -2,12 +2,15 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        ZStack {
-            Color(.systemBackground)
-                .ignoresSafeArea()
+        TabView {
+            ShipmentListView()
+                .tabItem { Label("货物", systemImage: "shippingbox") }
 
-            Text("测试成功")
-                .font(.system(size: 28, weight: .semibold))
+            ReminderListView()
+                .tabItem { Label("提醒", systemImage: "bell") }
+
+            MemoListView()
+                .tabItem { Label("备忘", systemImage: "note.text") }
         }
     }
 }
