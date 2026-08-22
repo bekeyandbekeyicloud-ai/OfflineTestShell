@@ -40,8 +40,12 @@ struct ShipmentListView: View {
                 Toggle("查看已归档", isOn: $showArchived)
 
                 if filtered.isEmpty {
-                    EmptyStateView(icon: "shippingbox", title: "暂无记录", subtitle: "点右上角 + 新建第一条货物记录")
-                        .listRowBackground(Color.clear)
+                    EmptyStateView(
+                        title: "暂无记录",
+                        systemImage: "shippingbox",
+                        message: "点右上角 + 新建第一条货物记录"
+                    )
+                    .listRowBackground(Color.clear)
                 } else {
                     ForEach(filtered) { shipment in
                         NavigationLink(destination: ShipmentDetailView(shipmentID: shipment.id)) {
@@ -100,28 +104,6 @@ struct ShipmentListView: View {
         case .progressing: return Color.yellow.opacity(0.20)
         case .unfinished: return Color.red.opacity(0.14)
         }
-    }
-}
-
-struct EmptyStateView: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 34))
-                .foregroundColor(.secondary)
-            Text(title)
-                .font(.headline)
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 34)
     }
 }
 
@@ -339,13 +321,16 @@ struct ShipmentDetailView: View {
         store.shipments.first { $0.id == shipmentID }
     }
 
+    @ViewBuilder
     var body: some View {
-        Group {
-            if let current = shipment {
-                shipmentContent(current)
-            } else {
-                EmptyStateView(icon: "exclamationmark.triangle", title: "记录不存在", subtitle: "这条记录可能已经被删除")
-            }
+        if let current = shipment {
+            shipmentContent(current)
+        } else {
+            EmptyStateView(
+                title: "记录不存在",
+                systemImage: "exclamationmark.triangle",
+                message: "这条记录可能已经被删除"
+            )
         }
     }
 
@@ -529,8 +514,12 @@ struct ReminderListView: View {
         NavigationStack {
             List {
                 if reminders.isEmpty {
-                    EmptyStateView(icon: "bell", title: "暂无提醒", subtitle: "在货物记录中设置提醒日期即可")
-                        .listRowBackground(Color.clear)
+                    EmptyStateView(
+                        title: "暂无提醒",
+                        systemImage: "bell",
+                        message: "在货物记录中设置提醒日期即可"
+                    )
+                    .listRowBackground(Color.clear)
                 } else {
                     ForEach(reminders) { shipment in
                         NavigationLink(destination: ShipmentDetailView(shipmentID: shipment.id)) {
