@@ -50,6 +50,10 @@ final class SheetsBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKU
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        // iOS 16 exposes an old Safari version even in desktop-content mode.
+        // Sheets blocks editing based on that browser identifier, so identify as
+        // the current desktop Chrome release while retaining WebKit underneath.
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true

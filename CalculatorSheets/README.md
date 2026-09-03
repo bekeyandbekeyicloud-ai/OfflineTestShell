@@ -13,6 +13,8 @@
 
 注意：Google 可能随时调整对嵌入式网页登录的限制。如果登录页提示浏览器不安全，完整 Google Sheets 网页和“绝不经过 Safari”这两个要求无法同时保证，需要改用系统浏览器完成首次授权。
 
+iOS 16 自带 WebKit 会暴露旧 Safari 版本。App 使用当前桌面 Chrome 浏览器标识绕过 Sheets 的旧浏览器只读提示；底层仍然是系统 WebKit，因此 Google 将来改变功能检测时可能需要再次更新。
+
 ## 构建 IPA
 
 推荐把 `CalculatorSheets` 单独推送到 GitHub，然后在 Actions 中手动运行 `Build TrollStore IPA`。下载产物并解压，得到 `Calculator.ipa`，用 TrollStore 导入。
