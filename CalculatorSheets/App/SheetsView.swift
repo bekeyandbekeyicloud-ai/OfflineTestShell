@@ -4,22 +4,24 @@ struct SheetsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject var model: SheetEditorModel
 
+    private let rowHeaderWidth: CGFloat = 46
+    private let cellWidth: CGFloat = 112
+    private let cellHeight: CGFloat = 40
+    @State private var gridMinX: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            if model.isLoading && model.sheets.isEmpty {
-                Spacer(); ProgressView("正在读取表格…"); Spacer()
+            if model.isLoading {
+                Spacer()
+                ProgressView(value: model.loadingProgress) { Text("正在读取完整表格与色块…") }
+                    .progressViewStyle(.linear).padding(32)
+                Spacer()
             } else if let error = model.errorMessage, model.sheets.isEmpty {
-                Spacer()
-                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
-                Text("无法读取表格").font(.headline)
-                Text(error).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
-                Button("重试") { Task { await model.loadMetadata() } }.buttonStyle(.borderedProminent)
-                Spacer()
+                errorView(error)
             } else {
                 sheetPicker
-                pageControls
-                spreadsheetGrid
+                continuousGrid
                 statusBar
             }
         }
@@ -35,7 +37,6 @@ struct SheetsView: View {
             Button { Task { await model.reload() } } label: { Image(systemName: "arrow.clockwise") }
                 .disabled(model.isLoading)
             Button { session.lock() } label: { Image(systemName: "lock.fill") }
-                .accessibilityLabel("立即锁定")
         }
         .padding(.horizontal, 16).frame(height: 48).foregroundStyle(.white).background(Color.black)
     }
@@ -53,80 +54,100 @@ struct SheetsView: View {
         .padding(.horizontal, 12).frame(height: 42).background(Color(white: 0.13))
     }
 
-    private var pageControls: some View {
-        HStack(spacing: 12) {
-            Button { Task { await model.previousRows() } } label: { Image(systemName: "chevron.up") }
-                .disabled(model.rowOffset == 1 || model.isLoading)
-            Button { Task { await model.nextRows() } } label: { Image(systemName: "chevron.down") }
-                .disabled(!model.hasMoreRows || model.isLoading)
-            Text("行 \(model.rowOffset)–\(model.lastVisibleRow)").font(.caption.monospacedDigit())
-            Spacer()
-            Button { Task { await model.previousColumns() } } label: { Image(systemName: "chevron.left") }
-                .disabled(model.columnOffset == 1 || model.isLoading)
-            Button { Task { await model.nextColumns() } } label: { Image(systemName: "chevron.right") }
-                .disabled(!model.hasMoreColumns || model.isLoading)
-            Text("列 \(model.columnName(model.columnOffset))–\(model.columnName(model.lastVisibleColumn))")
-                .font(.caption.monospacedDigit())
-        }
-        .padding(.horizontal, 14).frame(height: 40).foregroundStyle(.white).background(Color(white: 0.10))
-    }
-
-    private var spreadsheetGrid: some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    gridHeader("")
-                    ForEach(model.visibleColumnIndices, id: \.self) { gridHeader(model.columnName($0)) }
-                }
-                ForEach(model.visibleRowIndices, id: \.self) { row in
-                    HStack(spacing: 0) {
-                        gridHeader(String(row))
-                        ForEach(model.visibleColumnIndices, id: \.self) { column in
-                            CellEditor(
-                                value: model.binding(row: row, column: column),
-                                save: { value in await model.update(row: row, column: column, value: value) }
-                            )
+    private var continuousGrid: some View {
+        GeometryReader { outer in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(model.rowIndices, id: \.self) { row in
+                            HStack(spacing: 0) {
+                                gridHeader(String(row), width: rowHeaderWidth)
+                                    .offset(x: max(0, -gridMinX)).zIndex(2)
+                                ForEach(model.columnIndices, id: \.self) { column in
+                                    let style = model.cell(row: row, column: column)
+                                    CellEditor(
+                                        value: model.binding(row: row, column: column),
+                                        background: Color(hex: style.background),
+                                        foreground: Color(hex: style.foreground),
+                                        width: cellWidth,
+                                        height: cellHeight,
+                                        save: { value in await model.update(row: row, column: column, value: value) }
+                                    )
+                                }
+                            }
                         }
+                    } header: {
+                        HStack(spacing: 0) {
+                            gridHeader("", width: rowHeaderWidth)
+                                .offset(x: max(0, -gridMinX)).zIndex(4)
+                            ForEach(model.columnIndices, id: \.self) { column in
+                                gridHeader(model.columnName(column), width: cellWidth)
+                            }
+                        }
+                        .zIndex(3)
                     }
                 }
+                .frame(minWidth: outer.size.width, alignment: .topLeading)
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: GridXPreferenceKey.self,
+                                           value: proxy.frame(in: .named("sheetGrid")).minX)
+                })
             }
-        }
-        .background(Color.white)
-        .overlay {
-            if model.isLoading && !model.cells.isEmpty {
-                ProgressView().padding(20).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            }
+            .coordinateSpace(name: "sheetGrid")
+            .onPreferenceChange(GridXPreferenceKey.self) { gridMinX = $0 }
+            .scrollDismissesKeyboard(.interactively)
+            .background(Color.white)
         }
     }
 
-    private func gridHeader(_ text: String) -> some View {
-        Text(text).font(.caption.bold()).foregroundStyle(.secondary).frame(width: 82, height: 34)
-            .background(Color(white: 0.92)).overlay(Rectangle().stroke(Color(white: 0.78), lineWidth: 0.5))
+    private func gridHeader(_ text: String, width: CGFloat) -> some View {
+        Text(text).font(.caption.bold()).foregroundStyle(.secondary).frame(width: width, height: 34)
+            .background(Color(white: 0.92)).overlay(Rectangle().stroke(Color(white: 0.76), lineWidth: 0.5))
     }
 
     private var statusBar: some View {
         HStack {
             if model.isSaving { ProgressView().controlSize(.small); Text("正在保存…") }
             else if let error = model.errorMessage { Image(systemName: "exclamationmark.circle"); Text(error) }
-            else { Image(systemName: "checkmark.circle"); Text("更改会立即同步") }
+            else { Image(systemName: "checkmark.circle"); Text("连续滑动 · 色块已同步") }
             Spacer()
         }
         .font(.caption).foregroundStyle(model.errorMessage == nil ? Color.secondary : Color.red)
         .padding(.horizontal, 12).frame(height: 34).background(Color(white: 0.95))
     }
+
+    private func errorView(_ error: String) -> some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
+            Text("无法读取表格").font(.headline)
+            Text(error).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+            Button("重试") { Task { await model.loadMetadata() } }.buttonStyle(.borderedProminent)
+            Spacer()
+        }
+    }
+}
+
+private struct GridXPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct CellEditor: View {
     @Binding var value: String
+    let background: Color
+    let foreground: Color
+    let width: CGFloat
+    let height: CGFloat
     let save: (String) async -> Void
     @FocusState private var focused: Bool
     @State private var original = ""
 
     var body: some View {
         TextField("", text: $value)
-            .focused($focused).font(.system(size: 14)).foregroundStyle(.black).padding(.horizontal, 6)
-            .frame(width: 122, height: 38).background(Color.white)
-            .overlay(Rectangle().stroke(focused ? Color.green : Color(white: 0.82), lineWidth: focused ? 1.5 : 0.5))
+            .focused($focused).font(.system(size: 14)).foregroundStyle(foreground).padding(.horizontal, 6)
+            .frame(width: width, height: height).background(background)
+            .overlay(Rectangle().stroke(focused ? Color.green : Color(white: 0.78), lineWidth: focused ? 2 : 0.5))
             .onChange(of: focused) { isFocused in
                 if isFocused { original = value }
                 else if value != original { Task { await save(value) } }
@@ -134,3 +155,19 @@ private struct CellEditor: View {
             .submitLabel(.done).onSubmit { focused = false }
     }
 }
+
+private extension Color {
+    init(hex: String) {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var value: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&value)
+        let red, green, blue: UInt64
+        if cleaned.count == 6 {
+            red = value >> 16; green = (value >> 8) & 0xff; blue = value & 0xff
+        } else {
+            red = 255; green = 255; blue = 255
+        }
+        self.init(.sRGB, red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255, opacity: 1)
+    }
+}
+

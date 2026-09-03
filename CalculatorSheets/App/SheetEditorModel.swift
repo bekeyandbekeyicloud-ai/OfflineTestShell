@@ -12,6 +12,12 @@ struct SheetInfo: Codable, Equatable {
     let columns: Int
 }
 
+struct SheetCell: Equatable {
+    var value: String
+    var background: String
+    var foreground: String
+}
+
 private struct MetadataResponse: Codable {
     let ok: Bool
     let title: String?
@@ -21,7 +27,10 @@ private struct MetadataResponse: Codable {
 
 private struct ReadResponse: Codable {
     let ok: Bool
+    let startRow: Int?
     let values: [[String]]?
+    let backgrounds: [[String]]?
+    let fontColors: [[String]]?
     let error: String?
 }
 
@@ -32,30 +41,24 @@ private struct UpdateResponse: Codable {
 
 @MainActor
 final class SheetEditorModel: ObservableObject {
-    static let pageRows = 20
-    static let pageColumns = 8
+    private static let chunkRows = 100
 
     @Published var documentTitle = ""
     @Published var sheets: [SheetInfo] = []
     @Published var selectedSheetIndex = 0
-    @Published var cells: [[String]] = []
-    @Published var rowOffset = 1
-    @Published var columnOffset = 1
+    @Published var cells: [[SheetCell]] = []
     @Published var isLoading = false
+    @Published var loadingProgress = 0.0
     @Published var isSaving = false
     @Published var errorMessage: String?
 
     private var endpoint: URL? { URL(string: PrivateSheetConfig.endpoint) }
-    private var selectedSheet: SheetInfo? { sheets.indices.contains(selectedSheetIndex) ? sheets[selectedSheetIndex] : nil }
-    var visibleRowIndices: [Int] { Array(rowOffset...lastVisibleRow) }
-    var visibleColumnIndices: [Int] { Array(columnOffset...lastVisibleColumn) }
-    var lastVisibleRow: Int { min(rowOffset + Self.pageRows - 1, max(selectedSheet?.rows ?? 1, rowOffset)) }
-    var lastVisibleColumn: Int { min(columnOffset + Self.pageColumns - 1, max(selectedSheet?.columns ?? 1, columnOffset)) }
-    var hasMoreRows: Bool { lastVisibleRow < (selectedSheet?.rows ?? 1) }
-    var hasMoreColumns: Bool { lastVisibleColumn < (selectedSheet?.columns ?? 1) }
+    var selectedSheet: SheetInfo? { sheets.indices.contains(selectedSheetIndex) ? sheets[selectedSheetIndex] : nil }
+    var rowIndices: [Int] { Array(1...(selectedSheet?.rows ?? 1)) }
+    var columnIndices: [Int] { Array(1...(selectedSheet?.columns ?? 1)) }
 
     func loadMetadata() async {
-        isLoading = true; errorMessage = nil
+        isLoading = true; loadingProgress = 0; errorMessage = nil
         defer { isLoading = false }
         do {
             let response: MetadataResponse = try await get(action: "metadata", parameters: [:])
@@ -65,34 +68,36 @@ final class SheetEditorModel: ObservableObject {
             documentTitle = response.title ?? "表格"
             sheets = newSheets
             selectedSheetIndex = min(selectedSheetIndex, newSheets.count - 1)
-            rowOffset = 1; columnOffset = 1
-            try await loadPage()
+            try await loadEntireSheet()
         } catch { errorMessage = error.localizedDescription }
     }
 
     func reload() async {
         guard !sheets.isEmpty else { await loadMetadata(); return }
-        isLoading = true; errorMessage = nil
+        isLoading = true; loadingProgress = 0; errorMessage = nil
         defer { isLoading = false }
-        do { try await loadPage() } catch { errorMessage = error.localizedDescription }
+        do { try await loadEntireSheet() } catch { errorMessage = error.localizedDescription }
     }
 
     func selectSheet(at index: Int) async {
-        guard sheets.indices.contains(index) else { return }
-        selectedSheetIndex = index; rowOffset = 1; columnOffset = 1
+        guard sheets.indices.contains(index), index != selectedSheetIndex else { return }
+        selectedSheetIndex = index
         await reload()
     }
 
-    func nextRows() async { rowOffset += Self.pageRows; await reload() }
-    func previousRows() async { rowOffset = max(1, rowOffset - Self.pageRows); await reload() }
-    func nextColumns() async { columnOffset += Self.pageColumns; await reload() }
-    func previousColumns() async { columnOffset = max(1, columnOffset - Self.pageColumns); await reload() }
-
     func binding(row: Int, column: Int) -> Binding<String> {
         Binding(
-            get: { [weak self] in self?.value(row: row, column: column) ?? "" },
+            get: { [weak self] in self?.cell(row: row, column: column).value ?? "" },
             set: { [weak self] newValue in self?.setLocal(row: row, column: column, value: newValue) }
         )
+    }
+
+    func cell(row: Int, column: Int) -> SheetCell {
+        let r = row - 1, c = column - 1
+        guard cells.indices.contains(r), cells[r].indices.contains(c) else {
+            return SheetCell(value: "", background: "#ffffff", foreground: "#000000")
+        }
+        return cells[r][c]
     }
 
     func update(row: Int, column: Int, value: String) async {
@@ -123,26 +128,40 @@ final class SheetEditorModel: ObservableObject {
         return result
     }
 
-    private func loadPage() async throws {
+    private func loadEntireSheet() async throws {
         guard let sheet = selectedSheet else { return }
-        let response: ReadResponse = try await get(action: "read", parameters: [
-            "sheet": sheet.name, "row": String(rowOffset), "column": String(columnOffset),
-            "rows": String(Self.pageRows), "columns": String(Self.pageColumns)
-        ])
-        guard response.ok else { throw APIError.message(response.error ?? "读取失败") }
-        cells = response.values ?? []
-    }
+        let blank = SheetCell(value: "", background: "#ffffff", foreground: "#000000")
+        cells = Array(repeating: Array(repeating: blank, count: sheet.columns), count: sheet.rows)
+        let chunkCount = max(1, Int(ceil(Double(sheet.rows) / Double(Self.chunkRows))))
 
-    private func value(row: Int, column: Int) -> String {
-        let r = row - rowOffset, c = column - columnOffset
-        guard cells.indices.contains(r), cells[r].indices.contains(c) else { return "" }
-        return cells[r][c]
+        for chunk in 0..<chunkCount {
+            let startRow = chunk * Self.chunkRows + 1
+            let rowCount = min(Self.chunkRows, sheet.rows - startRow + 1)
+            let response: ReadResponse = try await get(action: "read", parameters: [
+                "sheet": sheet.name, "row": String(startRow), "column": "1",
+                "rows": String(rowCount), "columns": String(sheet.columns)
+            ])
+            guard response.ok else { throw APIError.message(response.error ?? "读取失败") }
+            let values = response.values ?? []
+            let backgrounds = response.backgrounds ?? []
+            let fontColors = response.fontColors ?? []
+            for r in values.indices where cells.indices.contains(startRow - 1 + r) {
+                for c in 0..<sheet.columns {
+                    cells[startRow - 1 + r][c] = SheetCell(
+                        value: values[r].indices.contains(c) ? values[r][c] : "",
+                        background: backgrounds.indices.contains(r) && backgrounds[r].indices.contains(c) ? backgrounds[r][c] : "#ffffff",
+                        foreground: fontColors.indices.contains(r) && fontColors[r].indices.contains(c) ? fontColors[r][c] : "#000000"
+                    )
+                }
+            }
+            loadingProgress = Double(chunk + 1) / Double(chunkCount)
+        }
     }
 
     private func setLocal(row: Int, column: Int, value: String) {
-        let r = row - rowOffset, c = column - columnOffset
+        let r = row - 1, c = column - 1
         guard cells.indices.contains(r), cells[r].indices.contains(c) else { return }
-        cells[r][c] = value
+        cells[r][c].value = value
     }
 
     private func get<T: Decodable>(action: String, parameters: [String: String]) async throws -> T {
