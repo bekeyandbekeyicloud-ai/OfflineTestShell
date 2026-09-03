@@ -40,6 +40,7 @@ final class SheetEditorModel: ObservableObject {
     @Published var rangeMode = false
     @Published var editorText = ""
     @Published var isLoading = false
+    @Published var isBackgroundLoading = false
     @Published var loadingProgress = 0.0
     @Published var isSaving = false
     @Published var errorMessage: String?
@@ -63,7 +64,8 @@ final class SheetEditorModel: ObservableObject {
             guard response.ok, let list = response.sheets, !list.isEmpty else { throw APIError.message(response.error ?? "没有可用工作表") }
             documentTitle = response.title ?? "表格"; sheets = list
             selectedSheetIndex = min(selectedSheetIndex, list.count - 1)
-            try await loadEntireSheet()
+            try await loadFirstScreen()
+            Task { await loadRemainingData() }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -71,7 +73,8 @@ final class SheetEditorModel: ObservableObject {
         guard !sheets.isEmpty else { await loadMetadata(); return }
         isLoading = true; loadingProgress = 0; errorMessage = nil
         defer { isLoading = false }
-        do { try await loadEntireSheet() } catch { errorMessage = error.localizedDescription }
+        do { try await loadFirstScreen(); Task { await loadRemainingData() } }
+        catch { errorMessage = error.localizedDescription }
     }
 
     func selectSheet(at index: Int) async {
@@ -164,31 +167,50 @@ final class SheetEditorModel: ObservableObject {
         } catch { errorMessage = "保存失败：\(error.localizedDescription)" }
     }
 
-    private func loadEntireSheet() async throws {
+    private func loadFirstScreen() async throws {
         guard let sheet = selectedSheet else { return }
-        let dimensions: DimensionsResponse = try await get(action:"dimensions", parameters:["sheet":sheet.name])
-        guard dimensions.ok else { throw APIError.message(dimensions.error ?? "读取行列尺寸失败") }
-        rowHeights = dimensions.rowHeights ?? Array(repeating:38,count:sheet.rows)
-        columnWidths = dimensions.columnWidths ?? Array(repeating:108,count:sheet.columns)
+        rowHeights = Array(repeating:38,count:sheet.rows)
+        columnWidths = Array(repeating:108,count:sheet.columns)
         cells = Array(repeating:Array(repeating:SheetCell(),count:sheet.columns),count:sheet.rows)
-        let chunks = max(1,Int(ceil(Double(sheet.rows)/Double(Self.chunkRows))))
-        for chunk in 0..<chunks {
-            let start = chunk*Self.chunkRows+1, count = min(Self.chunkRows,sheet.rows-start+1)
-            let response: ReadResponse = try await get(action:"read", parameters:["sheet":sheet.name,"row":String(start),"column":"1","rows":String(count),"columns":String(sheet.columns)])
-            guard response.ok else { throw APIError.message(response.error ?? "读取失败") }
-            let values=response.values ?? [], bg=response.backgrounds ?? [], fg=response.fontColors ?? []
-            let weights=response.fontWeights ?? [], sizes=response.fontSizes ?? [], aligns=response.alignments ?? []
-            for r in values.indices where cells.indices.contains(start-1+r) { for c in 0..<sheet.columns {
-                cells[start-1+r][c] = SheetCell(
-                    value: values[r].indices.contains(c) ? values[r][c] : "",
-                    background: bg.indices.contains(r) && bg[r].indices.contains(c) ? bg[r][c] : "#ffffff",
-                    foreground: fg.indices.contains(r) && fg[r].indices.contains(c) ? fg[r][c] : "#000000",
-                    bold: weights.indices.contains(r) && weights[r].indices.contains(c) && weights[r][c] == "bold",
-                    fontSize: sizes.indices.contains(r) && sizes[r].indices.contains(c) ? sizes[r][c] : 10,
-                    alignment: aligns.indices.contains(r) && aligns[r].indices.contains(c) ? aligns[r][c] : "left")
-            }}
-            loadingProgress=Double(chunk+1)/Double(chunks)
+        try await loadChunk(start:1,count:min(60,sheet.rows))
+        loadingProgress = 1
+    }
+
+    private func loadRemainingData() async {
+        guard let sheet = selectedSheet, sheet.rows > 60 else { return }
+        let sheetName = sheet.name
+        isBackgroundLoading = true; defer { isBackgroundLoading = false }
+        var start = 61
+        while start <= sheet.rows {
+            guard selectedSheet?.name == sheetName else { return }
+            do { try await loadChunk(start:start,count:min(Self.chunkRows,sheet.rows-start+1)) }
+            catch { errorMessage = error.localizedDescription; return }
+            start += Self.chunkRows
         }
+        Task { await loadDimensionsInBackground(for: sheetName) }
+    }
+
+    private func loadDimensionsInBackground(for sheetName:String) async {
+        guard selectedSheet?.name == sheetName else { return }
+        do {
+            let response:DimensionsResponse = try await get(action:"dimensions",parameters:["sheet":sheetName])
+            guard response.ok, selectedSheet?.name == sheetName else { return }
+            if let rows=response.rowHeights { rowHeights=rows }
+            if let columns=response.columnWidths { columnWidths=columns }
+        } catch { /* 尺寸读取不阻塞内容显示 */ }
+    }
+
+    private func loadChunk(start:Int,count:Int) async throws {
+        guard let sheet=selectedSheet else { return }
+        let response:ReadResponse = try await get(action:"read",parameters:["sheet":sheet.name,"row":String(start),"column":"1","rows":String(count),"columns":String(sheet.columns)])
+        guard response.ok else { throw APIError.message(response.error ?? "读取失败") }
+        let values=response.values ?? [],bg=response.backgrounds ?? [],fg=response.fontColors ?? []
+        let weights=response.fontWeights ?? [],sizes=response.fontSizes ?? [],aligns=response.alignments ?? []
+        var updated=cells
+        for r in values.indices where updated.indices.contains(start-1+r) { for c in 0..<sheet.columns {
+            updated[start-1+r][c]=SheetCell(value:values[r].indices.contains(c) ? values[r][c]:"",background:bg.indices.contains(r)&&bg[r].indices.contains(c) ? bg[r][c]:"#ffffff",foreground:fg.indices.contains(r)&&fg[r].indices.contains(c) ? fg[r][c]:"#000000",bold:weights.indices.contains(r)&&weights[r].indices.contains(c)&&weights[r][c]=="bold",fontSize:sizes.indices.contains(r)&&sizes[r].indices.contains(c) ? sizes[r][c]:10,alignment:aligns.indices.contains(r)&&aligns[r].indices.contains(c) ? aligns[r][c]:"left")
+        }}
+        cells=updated
     }
 
     private func get<T:Decodable>(action:String, parameters:[String:String]) async throws -> T {

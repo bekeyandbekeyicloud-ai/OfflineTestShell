@@ -127,7 +127,7 @@ struct SheetsView: View {
     private func header(_ text:String,width:CGFloat,height:CGFloat=32)->some View { Text(text).font(.caption.bold()).foregroundStyle(.secondary).frame(width:width*effectiveZoom,height:height*effectiveZoom).background(Color(white:0.92)).overlay(Rectangle().stroke(Color(white:0.75),lineWidth:0.5)) }
 
     private var statusBar:some View {
-        HStack { if model.isSaving{ProgressView().controlSize(.small);Text("正在同步…")}else if let e=model.errorMessage{Image(systemName:"exclamationmark.circle");Text(e)}else{Image(systemName:"checkmark.circle");Text("内容和格式会同步保存")};Spacer() }
+        HStack { if model.isSaving{ProgressView().controlSize(.small);Text("正在同步…")}else if model.isBackgroundLoading{ProgressView().controlSize(.small);Text("已可编辑 · 正在加载后续区域") }else if let e=model.errorMessage{Image(systemName:"exclamationmark.circle");Text(e)}else{Image(systemName:"checkmark.circle");Text("内容和格式会同步保存")};Spacer() }
             .font(.caption).foregroundStyle(model.errorMessage == nil ? Color.secondary:.red).padding(.horizontal,10).frame(height:32).background(Color(white:0.95))
     }
     private func errorView(_ error:String)->some View { VStack(spacing:12){Spacer();Image(systemName:"exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange);Text(error).font(.caption);Button("重试"){Task{await model.loadMetadata()}};Spacer()} }
