@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 @main
 struct CalculatorApp: App {
@@ -22,9 +23,26 @@ struct CalculatorApp: App {
 @MainActor
 final class AppSession: ObservableObject {
     @Published private(set) var isUnlocked = false
+    // Retained while the process is alive, so a brief background trip keeps the
+    // in-memory Google session. Force-quitting the app destroys it completely.
+    let browser = SheetsBrowser()
+
+    init() {
+        Self.purgeLegacyPersistentWebData()
+    }
 
     func unlock() { isUnlocked = true }
     func lock() { isUnlocked = false }
+
+    private static func purgeLegacyPersistentWebData() {
+        URLCache.shared.removeAllCachedResponses()
+        HTTPCookieStorage.shared.removeCookies(since: .distantPast)
+        let store = WKWebsiteDataStore.default()
+        store.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: .distantPast
+        ) {}
+    }
 }
 
 struct RootView: View {
@@ -33,7 +51,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if session.isUnlocked {
-                SheetsView()
+                SheetsView(browser: session.browser)
             } else {
                 CalculatorView()
             }
@@ -41,4 +59,3 @@ struct RootView: View {
         .animation(nil, value: session.isUnlocked)
     }
 }
-

@@ -3,7 +3,7 @@ import WebKit
 
 struct SheetsView: View {
     @EnvironmentObject private var session: AppSession
-    @StateObject private var browser = SheetsBrowser()
+    @ObservedObject var browser: SheetsBrowser
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,8 +41,9 @@ final class SheetsBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKU
 
     override init() {
         let configuration = WKWebViewConfiguration()
-        // default() is persistent, sandboxed to this app, and does not share Safari cookies.
-        configuration.websiteDataStore = .default()
+        // Memory-only: survives a temporary background suspension because this
+        // browser is retained by AppSession, but vanishes when the process is killed.
+        configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.allowsInlineMediaPlayback = true
         // Google otherwise serves a reduced mobile page that often pushes its native app.
