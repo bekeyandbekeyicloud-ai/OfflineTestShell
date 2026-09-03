@@ -12,6 +12,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Inject private sheet configuration
+        env:
+          SHEETS_ENDPOINT: ${{ secrets.CALCULATOR_SHEETS_ENDPOINT }}
+          SHEETS_ACCESS_KEY: ${{ secrets.CALCULATOR_SHEETS_ACCESS_KEY }}
+        run: |
+          test -n "$SHEETS_ENDPOINT"
+          test -n "$SHEETS_ACCESS_KEY"
+          perl -0pi -e 's|__SHEET_ENDPOINT__|$ENV{SHEETS_ENDPOINT}|g; s|__SHEET_ACCESS_KEY__|$ENV{SHEETS_ACCESS_KEY}|g' App/SheetEditorModel.swift
       - name: Generate project
         run: xcodegen generate
       - name: Build unsigned app
@@ -30,4 +38,3 @@ jobs:
           name: Calculator-TrollStore-IPA
           path: Calculator.ipa
           if-no-files-found: error
-

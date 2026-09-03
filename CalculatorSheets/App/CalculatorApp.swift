@@ -23,9 +23,8 @@ struct CalculatorApp: App {
 @MainActor
 final class AppSession: ObservableObject {
     @Published private(set) var isUnlocked = false
-    // Retained while the process is alive, so a brief background trip keeps the
-    // in-memory Google session. Force-quitting the app destroys it completely.
-    let browser = SheetsBrowser()
+    // Retained only while the process is alive. Force-quitting clears loaded cells.
+    let sheets = SheetEditorModel()
 
     init() {
         Self.purgeLegacyPersistentWebData()
@@ -51,7 +50,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if session.isUnlocked {
-                SheetsView(browser: session.browser)
+                SheetsView(model: session.sheets)
             } else {
                 CalculatorView()
             }
