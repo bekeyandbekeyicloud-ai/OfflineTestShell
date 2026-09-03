@@ -1,0 +1,36 @@
+name: Build Calculator TrollStore IPA
+
+on:
+  push:
+    branches: [build/calculator-sheets]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: CalculatorSheets
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project Calculator.xcodeproj -scheme Calculator \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package IPA
+        run: |
+          test -d build/Build/Products/Release-iphoneos/Calculator.app
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Calculator.app Payload/
+          zip -qry Calculator.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Calculator-TrollStore-IPA
+          path: CalculatorSheets/Calculator.ipa
+          if-no-files-found: error
+
