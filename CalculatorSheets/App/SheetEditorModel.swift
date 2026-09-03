@@ -24,6 +24,7 @@ private struct ReadResponse: Codable {
     let fontWeights: [[String]]?; let fontSizes: [[Double]]?; let alignments: [[String]]?; let error: String?
 }
 private struct BasicResponse: Codable { let ok: Bool; let error: String? }
+private struct DimensionsResponse: Codable { let ok: Bool; let rowHeights: [Int]?; let columnWidths: [Int]?; let error: String? }
 
 @MainActor
 final class SheetEditorModel: ObservableObject {
@@ -32,6 +33,8 @@ final class SheetEditorModel: ObservableObject {
     @Published var sheets: [SheetInfo] = []
     @Published var selectedSheetIndex = 0
     @Published var cells: [[SheetCell]] = []
+    @Published var rowHeights: [Int] = []
+    @Published var columnWidths: [Int] = []
     @Published var selectedStart: CellAddress?
     @Published var selectedEnd: CellAddress?
     @Published var rangeMode = false
@@ -112,12 +115,17 @@ final class SheetEditorModel: ObservableObject {
     func unmerge() async { await rangeCommand("unmerge") }
     func resizeRow(delta: Int) async {
         guard let a = selectedStart else { return }
+        if rowHeights.indices.contains(a.row - 1) { rowHeights[a.row - 1] = max(20, rowHeights[a.row - 1] + delta) }
         await post(["action":"dimension", "sheet":selectedSheet?.name ?? "", "kind":"row", "index":a.row, "delta":delta])
     }
     func resizeColumn(delta: Int) async {
         guard let a = selectedStart else { return }
+        if columnWidths.indices.contains(a.column - 1) { columnWidths[a.column - 1] = max(40, columnWidths[a.column - 1] + delta) }
         await post(["action":"dimension", "sheet":selectedSheet?.name ?? "", "kind":"column", "index":a.column, "delta":delta])
     }
+
+    func rowHeight(_ row: Int) -> CGFloat { CGFloat(rowHeights.indices.contains(row - 1) ? rowHeights[row - 1] : 38) }
+    func columnWidth(_ column: Int) -> CGFloat { CGFloat(columnWidths.indices.contains(column - 1) ? columnWidths[column - 1] : 108) }
 
     func columnName(_ column: Int) -> String {
         var number = column, result = ""
@@ -158,6 +166,10 @@ final class SheetEditorModel: ObservableObject {
 
     private func loadEntireSheet() async throws {
         guard let sheet = selectedSheet else { return }
+        let dimensions: DimensionsResponse = try await get(action:"dimensions", parameters:["sheet":sheet.name])
+        guard dimensions.ok else { throw APIError.message(dimensions.error ?? "读取行列尺寸失败") }
+        rowHeights = dimensions.rowHeights ?? Array(repeating:38,count:sheet.rows)
+        columnWidths = dimensions.columnWidths ?? Array(repeating:108,count:sheet.columns)
         cells = Array(repeating:Array(repeating:SheetCell(),count:sheet.columns),count:sheet.rows)
         let chunks = max(1,Int(ceil(Double(sheet.rows)/Double(Self.chunkRows))))
         for chunk in 0..<chunks {

@@ -4,7 +4,10 @@ struct SheetsView: View {
     @EnvironmentObject private var session: AppSession
     @ObservedObject var model: SheetEditorModel
     @State private var showFormats = false
-    private let cellWidth: CGFloat = 108, cellHeight: CGFloat = 38, rowWidth: CGFloat = 44
+    @State private var zoom: CGFloat = 1
+    @GestureState private var pinchScale: CGFloat = 1
+    private let rowWidth: CGFloat = 44
+    private var effectiveZoom: CGFloat { min(2,max(0.5,zoom * pinchScale)) }
 
     var body: some View {
         VStack(spacing:0) {
@@ -28,6 +31,7 @@ struct SheetsView: View {
             Image(systemName:"tablecells"); Text(model.documentTitle.isEmpty ? "表格":model.documentTitle).font(.headline).lineLimit(1)
             Spacer()
             Button { showFormats.toggle() } label:{ Image(systemName:"paintbrush.fill") }.disabled(model.selectedStart == nil)
+            Button { zoom = 1 } label:{ Text("\(Int(effectiveZoom * 100))%").font(.caption.monospacedDigit()) }
             Button { Task{await model.reload()} } label:{ Image(systemName:"arrow.clockwise") }.disabled(model.isLoading)
             Button { session.lock() } label:{ Image(systemName:"lock.fill") }
         }.padding(.horizontal,14).frame(height:46).foregroundStyle(.white).background(.black)
@@ -92,30 +96,35 @@ struct SheetsView: View {
                 Section {
                     ForEach(model.rowIndices,id:\.self){row in
                         HStack(spacing:0) {
-                            header(String(row),width:rowWidth)
+                            header(String(row),width:rowWidth,height:model.rowHeight(row))
                             ForEach(model.columnIndices,id:\.self){column in cell(row:row,column:column) }
                         }
                     }
                 } header:{
-                    HStack(spacing:0) { header("",width:rowWidth); ForEach(model.columnIndices,id:\.self){header(model.columnName($0),width:cellWidth)} }.zIndex(3)
+                    HStack(spacing:0) { header("",width:rowWidth); ForEach(model.columnIndices,id:\.self){header(model.columnName($0),width:model.columnWidth($0))} }.zIndex(3)
                 }
             }
-        }.scrollDismissesKeyboard(.interactively).background(.white)
+        }
+        .simultaneousGesture(MagnificationGesture()
+            .updating($pinchScale) { value,state,_ in state=value }
+            .onEnded { value in zoom=min(2,max(0.5,zoom*value)) })
+        .scrollDismissesKeyboard(.interactively).background(.white)
     }
 
     private func cell(row:Int,column:Int)->some View {
         let item=model.cell(row:row,column:column), selected=model.isSelected(row:row,column:column)
+        let width=model.columnWidth(column)*effectiveZoom, height=model.rowHeight(row)*effectiveZoom
         return Button { model.tap(row:row,column:column) } label:{
-            Text(item.value).font(.system(size:max(8,min(24,item.fontSize)),weight:item.bold ? .bold:.regular))
+            Text(item.value).font(.system(size:max(7,min(32,item.fontSize*effectiveZoom)),weight:item.bold ? .bold:.regular))
                 .foregroundStyle(Color(hex:item.foreground)).lineLimit(1)
                 .frame(maxWidth:.infinity,alignment:alignment(item.alignment)).padding(.horizontal,5)
-                .frame(width:cellWidth,height:cellHeight).background(Color(hex:item.background))
+                .frame(width:width,height:height).background(Color(hex:item.background))
                 .overlay(Rectangle().stroke(selected ? Color.green:Color(white:0.8),lineWidth:selected ? 2:0.5))
         }.buttonStyle(.plain)
     }
 
     private func alignment(_ value:String)->Alignment { value == "center" ? .center : (value == "right" ? .trailing:.leading) }
-    private func header(_ text:String,width:CGFloat)->some View { Text(text).font(.caption.bold()).foregroundStyle(.secondary).frame(width:width,height:32).background(Color(white:0.92)).overlay(Rectangle().stroke(Color(white:0.75),lineWidth:0.5)) }
+    private func header(_ text:String,width:CGFloat,height:CGFloat=32)->some View { Text(text).font(.caption.bold()).foregroundStyle(.secondary).frame(width:width*effectiveZoom,height:height*effectiveZoom).background(Color(white:0.92)).overlay(Rectangle().stroke(Color(white:0.75),lineWidth:0.5)) }
 
     private var statusBar:some View {
         HStack { if model.isSaving{ProgressView().controlSize(.small);Text("正在同步…")}else if let e=model.errorMessage{Image(systemName:"exclamationmark.circle");Text(e)}else{Image(systemName:"checkmark.circle");Text("内容和格式会同步保存")};Spacer() }
